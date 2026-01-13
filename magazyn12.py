@@ -12,17 +12,19 @@ except Exception as e:
     st.stop()
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Magazyn & Analityka", layout="wide")
+st.set_page_config(page_title="System Magazynowy", layout="wide")
 
 # --- PASEK BOCZNY (SIDEBAR) ---
 with st.sidebar:
-    st.title("🕹️ Automaty do gier")
-    st.image("https://img.freepik.com/free-vector/retro-arcade-machine_23-2147500516.jpg", caption="System v1.5")
+    st.title("⚙️ Panel Sterowania")
+    st.write("System Zarządzania Zasobami")
     st.divider()
-    st.info("Zalogowano jako Administrator")
+    if st.button("Odśwież dane"):
+        st.rerun()
+    st.info("Status: Połączono z bazą")
 
-# --- POBIERANIE DANYCH DO ANALIZY ---
-# Pobieramy dane raz na początku, aby użyć ich w zakładkach
+# --- POBIERANIE DANYCH ---
+# Pobieramy dane raz, aby zasilić wszystkie zakładki
 res_k = supabase.table("kategorie").select("*").order("id").execute()
 kategorie = res_k.data
 
@@ -30,9 +32,9 @@ res_p = supabase.table("produkty").select("*, kategorie(nazwa)").order("id").exe
 produkty = res_p.data
 
 # --- GŁÓWNA TREŚĆ ---
-st.title("📦 System Zarządzania i Analityki")
+st.title("📦 Magazyn i Analityka")
 
-tab1, tab2, tab3 = st.tabs(["📂 Kategorie", "🍎 Produkty", "📊 Analityka Magazynowa"])
+tab1, tab2, tab3 = st.tabs(["📂 Kategorie", "🍎 Produkty", "📊 Analityka"])
 
 # --- TAB 1: KATEGORIE ---
 with tab1:
@@ -41,9 +43,10 @@ with tab1:
         with st.form("form_kat", clear_on_submit=True):
             nazwa_kat = st.text_input("Nazwa kategorii")
             opis_kat = st.text_area("Opis")
-            if st.form_submit_button("Zapisz"):
+            if st.form_submit_button("Zapisz kategorię"):
                 if nazwa_kat:
                     supabase.table("kategorie").insert({"nazwa": nazwa_kat, "opis": opis_kat}).execute()
+                    st.success(f"Dodano kategorię: {nazwa_kat}")
                     st.rerun()
 
     if kategorie:
@@ -51,80 +54,69 @@ with tab1:
             c1, c2 = st.columns([5, 1])
             c1.write(f"ID: `{k['id']}` | **{k['nazwa']}**")
             if c2.button("Usuń", key=f"del_kat_{k['id']}"):
-                supabase.table("kategorie").delete().eq("id", k['id']).execute()
-                st.rerun()
+                try:
+                    supabase.table("kategorie").delete().eq("id", k['id']).execute()
+                    st.rerun()
+                except:
+                    st.error("Nie można usunąć kategorii, która zawiera produkty!")
+    else:
+        st.info("Brak kategorii w bazie.")
 
 # --- TAB 2: PRODUKTY ---
 with tab2:
     st.header("Zarządzanie Produktami")
     with st.expander("➕ Dodaj nowy produkt"):
         if not kategorie:
-            st.warning("Dodaj najpierw kategorię!")
+            st.warning("Najpierw zdefiniuj kategorie w pierwszej zakładce.")
         else:
             with st.form("form_prod", clear_on_submit=True):
                 n_p = st.text_input("Nazwa produktu")
-                l_p = st.number_input("Ilość", min_value=0)
-                c_p = st.number_input("Cena (zł)", min_value=0.0)
+                l_p = st.number_input("Liczba sztuk", min_value=0, step=1)
+                c_p = st.number_input("Cena jednostkowa (zł)", min_value=0.0, format="%.2f")
+                
                 kat_map = {k['nazwa']: k['id'] for k in kategorie}
-                wybrana_k = st.selectbox("Kategoria", options=list(kat_map.keys()))
-                if st.form_submit_button("Dodaj"):
-                    supabase.table("produkty").insert({
-                        "nazwa": n_p, "liczba": int(l_p), "cena": float(c_p), "kategoria_id": int(kat_map[wybrana_k])
-                    }).execute()
-                    st.rerun()
+                wybrana_k = st.selectbox("Przypisz do kategorii", options=list(kat_map.keys()))
+                
+                if st.form_submit_button("Dodaj do magazynu"):
+                    if n_p:
+                        supabase.table("produkty").insert({
+                            "nazwa": n_p,
+                            "liczba": int(l_p),
+                            "cena": float(c_p),
+                            "kategoria_id": int(kat_map[wybrana_k])
+                        }).execute()
+                        st.success(f"Dodano produkt: {n_p}")
+                        st.rerun()
 
     if produkty:
         for p in produkty:
             col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
             col1.write(f"ID: `{p['id']}`")
             col2.write(f"**{p['nazwa']}**")
-            n_k = p.get('kategorie', {}).get('nazwa', '-') if p.get('kategorie') else "-"
-            col3.write(f"📁 {n_k} | {p['liczba']} szt. | {p['cena']} zł")
+            
+            kat_obj = p.get('kategorie')
+            nazwa_k = kat_obj.get('nazwa', '-') if isinstance(kat_obj, dict) else "-"
+            
+            col3.write(f"📁 {nazwa_k} | {p['liczba']} szt. | {p['cena']} zł")
             if col4.button("🗑️", key=f"del_p_{p['id']}"):
                 supabase.table("produkty").delete().eq("id", p['id']).execute()
                 st.rerun()
+    else:
+        st.info("Magazyn jest pusty.")
 
 # --- TAB 3: ANALITYKA ---
 with tab3:
-    st.header("📊 Raport Magazynowy")
+    st.header("📊 Podsumowanie Statystyczne")
     
     if produkty:
-        # Konwersja do Pandas DataFrame dla łatwiejszych obliczeń
         df = pd.DataFrame(produkty)
         
-        # Obliczenia
-        total_items = df['liczba'].sum()
-        total_value = (df['liczba'] * df['cena']).sum()
-        avg_price = df['cena'].mean()
-        count_products = len(df)
-
-        # Wyświetlanie metryk w rzędzie
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Liczba produktów", count_products)
-        m2.metric("Suma sztuk", f"{total_items} szt.")
-        m3.metric("Wartość magazynu", f"{total_value:,.2f} zł")
-        m4.metric("Średnia cena", f"{avg_price:,.2f} zł")
-
-        st.divider()
-
-        # Wykresy
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.subheader("Ilość produktów w kategoriach")
-            # Przygotowanie danych do wykresu
-            df['kat_nazwa'] = df['kategorie'].apply(lambda x: x['nazwa'] if isinstance(x, dict) else 'Brak')
-            chart_data = df.groupby('kat_nazwa')['liczba'].sum()
-            st.bar_chart(chart_data)
-
-        with c2:
-            st.subheader("Wartość finansowa kategorii")
-            df['wartosc'] = df['liczba'] * df['cena']
-            val_data = df.groupby('kat_nazwa')['wartosc'].sum()
-            st.area_chart(val_data)
-            
-        st.subheader("Podsumowanie tabelaryczne")
-        st.dataframe(df[['nazwa', 'liczba', 'cena', 'kat_nazwa']], use_container_width=True)
+        # Obliczenia metryk
+        total_qty = df['liczba'].sum()
+        total_val = (df['liczba'] * df['cena']).sum()
+        prod_count = len(df)
         
-    else:
-        st.info("Brak danych do wyświetlenia analityki. Dodaj produkty do bazy.")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Rodzajów asortymentu", prod_count)
+        m2.metric("Łączna liczba sztuk", f"{total_qty} szt.")
+        m3.metric("Całkowita wartość", f"{total_val:,.2f} zł")
